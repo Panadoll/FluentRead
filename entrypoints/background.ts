@@ -1,9 +1,45 @@
 import {_service} from "@/entrypoints/service/_service";
 import {config} from "@/entrypoints/utils/config";
 import {CONTEXT_MENU_IDS} from "@/entrypoints/utils/constant";
+import { storage } from '@wxt-dev/storage';
 
 // 翻译状态管理
 let translationStateMap = new Map<number, boolean>(); // tabId -> isTranslated
+
+function getMainDomainFromUrl(url?: string): string {
+    if (!url) return '';
+    try {
+        const noProtocol = url.replace(/^(https?:\/\/)/, '');
+        const hostname = noProtocol.split('/')[0].replace(/^www\./, '');
+        const parts = hostname.split('.');
+        if (parts.length >= 3 &&
+            ((parts[parts.length - 2] === 'co' || parts[parts.length - 2] === 'com') &&
+                parts[parts.length - 1].length === 2)) {
+            return parts.slice(-3).join('.');
+        }
+        if (parts.length >= 2) {
+            return parts.slice(-2).join('.');
+        }
+        return hostname;
+    } catch (error) {
+        console.error('getMainDomainFromUrl error:', error);
+        return '';
+    }
+}
+
+async function updateBlacklist(mainDomain: string, shouldAdd: boolean) {
+    if (!mainDomain) return;
+    const value = await storage.getItem('local:config');
+    const parsed = typeof value === 'string' && value ? JSON.parse(value) : {};
+    const list = Array.isArray(parsed.blockedMainDomains) ? parsed.blockedMainDomains : [];
+    const next = shouldAdd
+        ? Array.from(new Set([...list, mainDomain]))
+        : list.filter((item: string) => item !== mainDomain);
+
+    parsed.blockedMainDomains = next;
+    Object.assign(config, parsed);
+    await storage.setItem('local:config', JSON.stringify(parsed));
+}
 
 /**
  * 在background脚本中调用微软翻译API（避免Firefox CORS问题）
@@ -82,6 +118,20 @@ export default defineBackground({
                 contexts: ['page', 'selection'],
                 enabled: false, // 初始状态为禁用
             });
+
+            browser.contextMenus.create({
+                id: CONTEXT_MENU_IDS.ADD_TO_BLACKLIST,
+                title: '加入黑名单并撤销翻译',
+                parentId: 'fluentread-parent',
+                contexts: ['page', 'selection'],
+            });
+
+            browser.contextMenus.create({
+                id: CONTEXT_MENU_IDS.REMOVE_FROM_BLACKLIST,
+                title: '从黑名单移除',
+                parentId: 'fluentread-parent',
+                contexts: ['page', 'selection'],
+            });
         } catch (error) {
             console.error('Error setting up context menu:', error);
         }
@@ -113,6 +163,23 @@ export default defineBackground({
                     updateContextMenus(tab.id!);
                 }).catch((error: any) => {
                     console.error('Failed to send message to content script:', error);
+                });
+            } else if (info.menuItemId === CONTEXT_MENU_IDS.ADD_TO_BLACKLIST) {
+                const mainDomain = getMainDomainFromUrl(tab.url);
+                updateBlacklist(mainDomain, true).then(() => {
+                    browser.tabs.sendMessage(tab.id, {
+                        type: 'contextMenuTranslate',
+                        action: 'restore'
+                    }).catch(() => {
+                        // 忽略发送失败
+                    });
+                }).catch((error: any) => {
+                    console.error('Failed to update blacklist:', error);
+                });
+            } else if (info.menuItemId === CONTEXT_MENU_IDS.REMOVE_FROM_BLACKLIST) {
+                const mainDomain = getMainDomainFromUrl(tab.url);
+                updateBlacklist(mainDomain, false).catch((error: any) => {
+                    console.error('Failed to update blacklist:', error);
                 });
             }
         });

@@ -37,8 +37,31 @@
   <img src="/screenshot-2.png" alt="拖入安装包" style="width: 45%; max-width: 100%;border: 1px solid black;margin: 5px;border-radius: 8px;box-shadow: 0 2px 4px rgba(0,0,0,0.1);" />
 </div>
 
+## 使用方式
+
+### 1. 自动翻译（零操作）
+安装并启用后，**非中文网站会自动全文翻译为中文**，无需任何操作。
+
+### 2. 黑名单（主域名）
+当某个站点不需要自动翻译时，可快速加入黑名单：
+
+- **右键页面** → `FluentRead` → `加入黑名单并撤销翻译`
+- **Popup 面板** → `站点黑名单` → `加入黑名单` / `移除`
+
+### 3. 翻译引擎
+插件仅保留 3 个引擎：
+
+- **微软翻译**
+- **谷歌翻译**
+- **本地模型 (Ollama)**：默认地址 `http://localhost:11434/v1/chat/completions`
+
+### 4. Ollama 最小配置
+确保 Ollama 正在运行，并在 Popup 中选择 **本地模型 (Ollama)**：
+
+- 模型：默认 `llama3`（可改为本地已有模型）
+- 服务地址：`http://localhost:11434/v1/chat/completions`
+
 ## 下一步
 
-- 了解[功能介绍](./features.md)来掌握所有功能
-- 查看[基本配置](../config/)和[翻译引擎配置](../config/translation-engines.md)了解更多设置选项
+- 了解[功能介绍](./features.md)来掌握当前功能
 - 访问我们的 [GitHub 仓库](https://github.com/Bistutu/FluentRead)参与讨论

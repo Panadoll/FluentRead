@@ -22,7 +22,7 @@ export default defineConfig({
         }
     }),
     manifest: {
-        permissions: ['storage', 'contextMenus', 'offscreen'],
+        permissions: ['storage', 'contextMenus'],
     },
 
 });

@@ -116,11 +116,7 @@ export function autoTranslateEnglishPage() {
                 // 标记为已翻译
                 node.setAttribute(TRANSLATED_ATTR, 'true');
 
-                if (config.display === styles.bilingualTranslation) {
-                    handleBilingualTranslation(node, false);
-                } else {
-                    handleSingleTranslation(node, false);
-                }
+                handleBilingualTranslation(node, false);
 
                 // 停止观察该节点
                 observer.unobserve(node);
@@ -180,11 +176,7 @@ export function handleTranslation(mouseX: number, mouseY: number, delayTime: num
         htmlSet.add(nodeOuterHTML);
 
         // 根据翻译模式进行翻译
-        if (config.display === styles.bilingualTranslation) {
-            handleBilingualTranslation(node, delayTime > 0);  // 根据 delayTime 可判断是否为滑动翻译
-        } else {
-            handleSingleTranslation(node, delayTime > 0);
-        }
+        handleBilingualTranslation(node, delayTime > 0);  // 根据 delayTime 可判断是否为滑动翻译
     }, delayTime);
 }
 

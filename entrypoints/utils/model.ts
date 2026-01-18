@@ -53,10 +53,11 @@ export class Config {
     translationStatus: boolean; // 是否启用全文翻译进度面板
     inputBoxTranslationTrigger: string; // 输入框翻译触发方式
     inputBoxTranslationTarget: string; // 输入框翻译目标语言
+    blockedMainDomains: string[]; // 主域名黑名单
 
     constructor() {
         this.on = true;
-        this.autoTranslate = false;
+        this.autoTranslate = true;
         this.from = defaultOption.from;
         this.to = defaultOption.to;
         this.style = defaultOption.style;
@@ -89,6 +90,7 @@ export class Config {
         this.selectionTranslatorMode = 'bilingual'; // 默认双语显示模式
         this.newApiUrl = 'http://localhost:3000'; // NewAPI 默认地址
         this.maxConcurrentTranslations = 6; // 默认最大并发数为6
+        this.model[services.custom] = 'llama3';
         this.youdaoAppKey = ''; // 有道翻译 App Key
         this.youdaoAppSecret = ''; // 有道翻译 App Secret
         this.tencentSecretId = ''; // 腾讯云 Secret ID
@@ -98,6 +100,7 @@ export class Config {
         this.translationStatus = true; // 默认启用翻译进度面板
         this.inputBoxTranslationTrigger = 'disabled'; // 默认关闭输入框翻译
         this.inputBoxTranslationTarget = 'en'; // 默认翻译成英文
+        this.blockedMainDomains = []; // 默认无黑名单
     }
 }
 

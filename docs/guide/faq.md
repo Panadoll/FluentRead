@@ -4,29 +4,28 @@
 
 ### 如何解决 Ollama 403 跨域访问问题？
 
- [Ollama 默认禁用跨域访问](https://github.com/ollama/ollama/issues/669)，需要特殊配置才能在浏览器扩展中使用。按系统进行如下“通配符 * 快速修复”配置即可。
+[Ollama 默认禁用跨域访问](https://github.com/ollama/ollama/issues/669)，需要特殊配置才能在浏览器扩展中使用。按系统进行如下“通配符 * 快速修复”配置即可。
 
- - macOS：在终端执行下面指令，允许跨域：
-   ```bash
-   launchctl setenv OLLAMA_ORIGINS "*"
-   ```
-   然后使用以下命令启动 App：
-   ```bash
-   OLLAMA_ORIGINS="*" ollama serve
-   ```
-   
- - Windows：打开系统环境变量（用户变量）新建 2 个变量，然后启动 App：
-   - 变量名：`OLLAMA_HOST`，变量值：`0.0.0.0`
-   - 变量名：`OLLAMA_ORIGINS`，变量值：`*`
+- macOS：在终端执行下面指令，允许跨域：
+  ```bash
+  launchctl setenv OLLAMA_ORIGINS "*"
+  ```
+  然后使用以下命令启动 App：
+  ```bash
+  OLLAMA_ORIGINS="*" ollama serve
+  ```
 
-   ```bash
-   OLLAMA_ORIGINS="*" ollama serve
-   ```
+- Windows：打开系统环境变量（用户变量）新建 2 个变量，然后启动 App：
+  - 变量名：`OLLAMA_HOST`，变量值：`0.0.0.0`
+  - 变量名：`OLLAMA_ORIGINS`，变量值：`*`
+  ```bash
+  OLLAMA_ORIGINS="*" ollama serve
+  ```
 
- - Linux：直接命令行启动。
-   ```bash
-   OLLAMA_ORIGINS="*" ollama serve
-   ```
+- Linux：直接命令行启动。
+  ```bash
+  OLLAMA_ORIGINS="*" ollama serve
+  ```
 
 #### 配置验证
 
@@ -71,19 +70,28 @@ http://localhost:11434/v1/chat/completions
    - 重新启动 Ollama
 
 3. **检查插件配置**：
-   - 翻译服务选择："⭐自定义⭐️"
-   - API 地址：`http://localhost:11434/v1/chat/completions`
-   - Token：可设置为任意值（例如：`test`）
+   - 翻译服务选择："本地模型 (Ollama)"
+   - 服务地址：`http://localhost:11434/v1/chat/completions`
    - 模型：确保使用本地已安装的模型名称
 
 4. **查看浏览器控制台**：
    - 打开浏览器开发者工具（F12）
    - 查看 Console 和 Network 标签页中的错误信息
 
-::: tip 提示
+:::: tip 提示
 如果遇到连接问题，请确保：
 1. Ollama 服务已正常启动
 2. 已正确配置跨域访问，并在日志中确认生效
 3. 接口地址完全正确，包括 `/v1/chat/completions` 路径
 4. 本地已安装了相应的模型（可通过 `ollama list` 查看已安装模型）
-::: 
+::::
+
+## 自动翻译与黑名单
+
+### 为什么某些网站不自动翻译？
+1. 页面是中文站（`lang` 为 `zh` 或中文比例较高）
+2. 该站点已加入黑名单（主域名）
+
+### 如何让某站点停止自动翻译？
+- 右键页面 → `FluentRead` → `加入黑名单并撤销翻译`
+- 或在 popup 面板的 **站点黑名单** 中加入
