@@ -10,10 +10,21 @@ async function custom(message: any) {
     headers.append('Content-Type', 'application/json');
     headers.append('Authorization', `Bearer ${config.token[services.custom]}`);
 
+    const requestBody = commonMsgTemplate(message.origin);
+    
+    // 调试日志：在开发模式下输出请求详情
+    if (process.env.NODE_ENV === 'development') {
+        console.log('[FluentRead] Ollama 请求详情:', {
+            url: config.custom,
+            body: requestBody,
+            parsedBody: JSON.parse(requestBody)
+        });
+    }
+
     const resp = await fetch(config.custom, {
         method: method.POST,
         headers: headers,
-        body: commonMsgTemplate(message.origin)
+        body: requestBody
     });
 
     if (resp.ok) {

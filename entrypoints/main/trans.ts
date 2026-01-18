@@ -22,6 +22,127 @@ const TRANSLATED_ID_ATTR = 'data-fr-node-id'; // 添加节点ID属性
 
 let nodeIdCounter = 0; // 节点ID计数器
 
+// ========== 展开重翻：源文签名与限流机制 ==========
+
+// 存储已翻译节点的源文签名（用于检测源文变化）
+const sourceSignatureMap = new WeakMap<Element, string>();
+
+// 存储每个节点的重翻信息（时间戳与次数）
+const retranslateInfoMap = new WeakMap<Element, { lastAt: number; count: number }>();
+
+// 重翻限流配置
+const RETRANSLATE_MIN_INTERVAL_MS = 800; // 同一节点最小重翻间隔
+const RETRANSLATE_MAX_COUNT = 5; // 同一节点最大重翻次数（页面会话内）
+
+// 抑制 MutationObserver 的全局标记（防止插件自身 DOM 变更触发死循环）
+let suppressObserver = false;
+
+// 提取节点的"纯源文"（移除 FluentRead 注入的元素后的文本）
+export function extractSourceText(node: Element): string {
+    // 克隆节点以避免修改原始 DOM
+    const clone = node.cloneNode(true) as Element;
+    
+    // 移除 FluentRead 注入的所有元素
+    const injectSelectors = [
+        '.fluent-read-bilingual-content',
+        '.fluent-read-loading',
+        '.fluent-read-retry-wrapper'
+    ];
+    injectSelectors.forEach(selector => {
+        clone.querySelectorAll(selector).forEach(el => el.remove());
+    });
+    
+    // 获取“可见文本”并尽量保留段落/换行（如 <br>、多段文本）
+    // 注意：这里不要做 \s+ 压缩，否则会把段落边界抹掉，导致双语排版变成一坨
+    const raw = (clone as any).innerText ?? clone.textContent ?? '';
+    return normalizeForTranslation(raw);
+}
+
+// 标准化文本（用于签名对比：忽略纯空白差异）
+function normalizeForSignature(text: string): string {
+    return text.replace(/\s+/g, ' ').trim();
+}
+
+// 标准化文本（用于翻译：保留换行/段落，清理多余空白）
+function normalizeForTranslation(text: string): string {
+    if (!text) return '';
+    // 统一换行符
+    let t = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    // 去掉每行行尾空白
+    t = t.replace(/[ \t]+\n/g, '\n');
+    // 合并过多的空行（保留段落分隔）
+    t = t.replace(/\n{3,}/g, '\n\n');
+    return t.trim();
+}
+
+// 计算源文签名（当前直接使用标准化后的文本，后续可改为 hash）
+export function computeSourceSignature(node: Element): string {
+    return normalizeForSignature(extractSourceText(node));
+}
+
+// 保存节点的源文签名
+export function saveSourceSignature(node: Element): void {
+    const sig = computeSourceSignature(node);
+    sourceSignatureMap.set(node, sig);
+}
+
+// 获取节点的已保存源文签名
+export function getSourceSignature(node: Element): string | undefined {
+    return sourceSignatureMap.get(node);
+}
+
+// 检查节点源文是否发生变化
+export function hasSourceChanged(node: Element): boolean {
+    const oldSig = getSourceSignature(node);
+    if (oldSig === undefined) return false; // 无历史签名，视为未变化
+    const newSig = computeSourceSignature(node);
+    return oldSig !== newSig;
+}
+
+// 检查节点是否可以重翻（限流检查）
+export function canRetranslate(node: Element): boolean {
+    const info = retranslateInfoMap.get(node);
+    if (!info) return true; // 首次重翻
+    
+    const now = Date.now();
+    // 检查时间间隔
+    if (now - info.lastAt < RETRANSLATE_MIN_INTERVAL_MS) return false;
+    // 检查次数上限
+    if (info.count >= RETRANSLATE_MAX_COUNT) return false;
+    
+    return true;
+}
+
+// 记录重翻（更新限流信息）
+function recordRetranslate(node: Element): void {
+    const info = retranslateInfoMap.get(node);
+    const now = Date.now();
+    if (info) {
+        info.lastAt = now;
+        info.count++;
+    } else {
+        retranslateInfoMap.set(node, { lastAt: now, count: 1 });
+    }
+}
+
+// 包装函数：在执行期间抑制 MutationObserver
+export function withSuppressedObserver<T>(fn: () => T): T {
+    suppressObserver = true;
+    try {
+        return fn();
+    } finally {
+        // 使用 queueMicrotask 确保 DOM 变更完成后再解除抑制
+        queueMicrotask(() => {
+            suppressObserver = false;
+        });
+    }
+}
+
+// 检查当前是否应抑制 observer
+export function isObserverSuppressed(): boolean {
+    return suppressObserver;
+}
+
 // 恢复原文内容
 export function restoreOriginalContent() {
     // 取消所有等待中的翻译任务
@@ -97,29 +218,68 @@ export function autoTranslateEnglishPage() {
 
     isAutoTranslating = true;
 
+    const youtubeMode = isYouTubePage();
+    const youtubeObserveMap = youtubeMode ? new WeakMap<Element, Element>() : null;
+
+    const startTranslateNode = (node: Element) => {
+        // 去重
+        if (node.hasAttribute(TRANSLATED_ATTR)) return;
+
+        // 为节点分配唯一ID
+        const nodeId = `fr-node-${nodeIdCounter++}`;
+        node.setAttribute(TRANSLATED_ID_ATTR, nodeId);
+
+        // 保存原始内容
+        originalContents.set(nodeId, node.innerHTML);
+
+        // 标记为已翻译
+        node.setAttribute(TRANSLATED_ATTR, 'true');
+
+        handleBilingualTranslation(node, false);
+    };
+
+    const findObservableTarget = (node: Element): Element => {
+        // YouTube 上经常出现 display: contents 或无 box 的元素（如 yt-formatted-string）
+        // IntersectionObserver 观察这种元素可能永远不触发，因此需要向上找一个有 box 的祖先作为观察目标
+        let cur: Element | null = node;
+        for (let i = 0; cur && i < 8; i++, cur = cur.parentElement) {
+            try {
+                const style = getComputedStyle(cur);
+                if (style.display === 'contents') continue;
+            } catch {
+                // ignore
+            }
+            if (cur instanceof HTMLElement) {
+                const rect = cur.getBoundingClientRect();
+                if (rect.width > 0 && rect.height > 0) return cur;
+            }
+        }
+        return node.parentElement || node;
+    };
+
+    const observeCandidate = (node: Element) => {
+        if (!observer) return;
+        if (!youtubeMode) {
+            observer.observe(node);
+            return;
+        }
+
+        const target = findObservableTarget(node);
+        youtubeObserveMap?.set(target, node);
+        observer.observe(target);
+    };
+
     // 创建观察器
     observer = new IntersectionObserver((entries, observer) => {
         entries.forEach(entry => {
             if (entry.isIntersecting && isAutoTranslating) {
-                const node = entry.target as Element;
+                const target = entry.target as Element;
+                const node = youtubeObserveMap?.get(target) || target;
 
-                // 去重
-                if (node.hasAttribute(TRANSLATED_ATTR)) return;
-                
-                // 为节点分配唯一ID
-                const nodeId = `fr-node-${nodeIdCounter++}`;
-                node.setAttribute(TRANSLATED_ID_ATTR, nodeId);
-                
-                // 保存原始内容
-                originalContents.set(nodeId, node.innerHTML);
-                
-                // 标记为已翻译
-                node.setAttribute(TRANSLATED_ATTR, 'true');
+                startTranslateNode(node);
 
-                handleBilingualTranslation(node, false);
-
-                // 停止观察该节点
-                observer.unobserve(node);
+                // 停止观察该目标（YouTube 可能是祖先元素）
+                observer.unobserve(target);
             }
         });
     }, {
@@ -130,11 +290,13 @@ export function autoTranslateEnglishPage() {
 
     // 开始观察所有节点
     nodes.forEach(node => {
-        observer?.observe(node);
+        observeCandidate(node);
     });
 
     // 创建 MutationObserver 监听 DOM 变化
     mutationObserver = new MutationObserver((mutations) => {
+        // 如果插件自身正在修改 DOM，跳过以防死循环
+        if (suppressObserver) return;
         if (!isAutoTranslating) return;
         
         mutations.forEach(mutation => {
@@ -144,7 +306,7 @@ export function autoTranslateEnglishPage() {
                     const newNodes = grabAllNode(node as Element).filter(
                         n => !n.hasAttribute(TRANSLATED_ATTR)
                     );
-                    newNodes.forEach(n => observer?.observe(n));
+                    newNodes.forEach(n => observeCandidate(n));
                 }
             });
         });
@@ -155,6 +317,15 @@ export function autoTranslateEnglishPage() {
         childList: true,
         subtree: true
     });
+}
+
+function isYouTubePage(): boolean {
+    try {
+        const host = location.hostname.toLowerCase();
+        return host === 'youtube.com' || host.endsWith('.youtube.com');
+    } catch {
+        return false;
+    }
 }
 
 // 处理鼠标悬停翻译的主函数
@@ -192,10 +363,12 @@ export function handleBilingualTranslation(node: any, slide: boolean) {
         }
         let spinner = insertLoadingSpinner(bilingualNode as HTMLElement, true);
         setTimeout(() => {
-            spinner.remove();
-            const content = searchClassName(bilingualNode as HTMLElement, 'fluent-read-bilingual-content');
-            if (content && content instanceof HTMLElement) content.remove();
-            (bilingualNode as HTMLElement).classList.remove('fluent-read-bilingual');
+            withSuppressedObserver(() => {
+                spinner.remove();
+                const content = searchClassName(bilingualNode as HTMLElement, 'fluent-read-bilingual-content');
+                if (content && content instanceof HTMLElement) content.remove();
+                (bilingualNode as HTMLElement).classList.remove('fluent-read-bilingual');
+            });
             htmlSet.delete(nodeOuterHTML);
         }, 250);
         return;
@@ -206,7 +379,7 @@ export function handleBilingualTranslation(node: any, slide: boolean) {
     if (cached) {
         let spinner = insertLoadingSpinner(node, true);
         setTimeout(() => {
-            spinner.remove();
+            withSuppressedObserver(() => spinner.remove());
             htmlSet.delete(nodeOuterHTML);
             bilingualAppendChild(node, cached);
         }, 250);
@@ -227,14 +400,15 @@ export function handleSingleTranslation(node: any, slide: boolean) {
         // handleTranslation 已处理防抖 故删除判断 原bug 在保存完成后 刷新页面 可以取得缓存 直接return并没有翻译
         let spinner = insertLoadingSpinner(node, true);
         setTimeout(() => {
-            spinner.remove();
-            htmlSet.delete(nodeOuterHTML);
+            withSuppressedObserver(() => {
+                spinner.remove();
+                htmlSet.delete(nodeOuterHTML);
 
-            // 兼容部分网站独特的 DOM 结构
-            let fn = replaceCompatFn[getMainDomain(document.location.hostname)];
-            if (fn) fn(node, outerHTMLCache);
-            else node.outerHTML = outerHTMLCache;
-
+                // 兼容部分网站独特的 DOM 结构
+                let fn = replaceCompatFn[getMainDomain(document.location.hostname)];
+                if (fn) fn(node, outerHTMLCache);
+                else node.outerHTML = outerHTMLCache;
+            });
         }, 250);
         return;
     }
@@ -246,18 +420,19 @@ export function handleSingleTranslation(node: any, slide: boolean) {
 function bilingualTranslate(node: any, nodeOuterHTML: any) {
     if (detectlang(node.textContent.replace(/[\s\u3000]/g, '')) === config.to) return;
 
-    let origin = node.textContent;
+    // bilingual 模式也尽量保留段落/换行，避免译文排版被压扁
+    const origin = (node as HTMLElement)?.innerText ?? node.textContent;
     let spinner = insertLoadingSpinner(node);
     
     // 使用队列管理的翻译API
     translateText(origin, document.title)
         .then((text: string) => {
-            spinner.remove();
+            withSuppressedObserver(() => spinner.remove());
             htmlSet.delete(nodeOuterHTML);
             bilingualAppendChild(node, text);
         })
         .catch((error: Error) => {
-            spinner.remove();
+            withSuppressedObserver(() => spinner.remove());
             insertFailedTip(node, error.toString() || "翻译失败", spinner);
         });
 }
@@ -272,23 +447,25 @@ export function singleTranslate(node: any) {
     // 使用队列管理的翻译API
     translateText(origin, document.title)
         .then((text: string) => {
-            spinner.remove();
-            
-            text = beautyHTML(text);
-            
-            if (!text || origin === text) return;
-            
-            let oldOuterHtml = node.outerHTML;
-            node.innerHTML = text;
-            let newOuterHtml = node.outerHTML;
-            
-            // 缓存翻译结果
-            cache.localSetDual(oldOuterHtml, newOuterHtml);
-            cache.set(htmlSet, newOuterHtml, 250);
-            htmlSet.delete(oldOuterHtml);
+            withSuppressedObserver(() => {
+                spinner.remove();
+                
+                text = beautyHTML(text);
+                
+                if (!text || origin === text) return;
+                
+                let oldOuterHtml = node.outerHTML;
+                node.innerHTML = text;
+                let newOuterHtml = node.outerHTML;
+                
+                // 缓存翻译结果
+                cache.localSetDual(oldOuterHtml, newOuterHtml);
+                cache.set(htmlSet, newOuterHtml, 250);
+                htmlSet.delete(oldOuterHtml);
+            });
         })
         .catch((error: Error) => {
-            spinner.remove();
+            withSuppressedObserver(() => spinner.remove());
             insertFailedTip(node, error.toString() || "翻译失败", spinner);
         });
 }
@@ -312,15 +489,126 @@ export const handleBtnTranslation = throttle((node: any) => {
 
 
 function bilingualAppendChild(node: any, text: string) {
-    node.classList.add("fluent-read-bilingual");
-    let newNode = document.createElement("span");
-    newNode.classList.add("fluent-read-bilingual-content");
-    // find the style
-    const style = options.styles.find(s => s.value === config.style && !s.disabled);
-    if (style?.class) {
-        newNode.classList.add(style.class);
+    withSuppressedObserver(() => {
+        node.classList.add("fluent-read-bilingual");
+        let newNode = document.createElement("span");
+        newNode.classList.add("fluent-read-bilingual-content");
+        // find the style
+        const style = options.styles.find(s => s.value === config.style && !s.disabled);
+        if (style?.class) {
+            newNode.classList.add(style.class);
+        }
+        newNode.append(text);
+        smashTruncationStyle(node);
+        node.appendChild(newNode);
+        
+        // 保存源文签名（用于后续检测展开/变化）
+        saveSourceSignature(node);
+    });
+}
+
+// ========== 展开重翻：重翻已翻译节点 ==========
+
+// 重翻已翻译的双语节点（当源文发生变化时调用）
+export function retranslateBilingualNode(node: Element): boolean {
+    // 1. 检查节点是否已被翻译
+    if (!node.hasAttribute(TRANSLATED_ATTR)) {
+        return false;
     }
-    newNode.append(text);
-    smashTruncationStyle(node);
-    node.appendChild(newNode);
+    
+    // 2. 检查源文是否真的发生了变化
+    if (!hasSourceChanged(node)) {
+        return false;
+    }
+    
+    // 3. 检查限流（时间间隔和次数）
+    if (!canRetranslate(node)) {
+        console.log('[FluentRead] 重翻被限流，跳过节点:', node);
+        return false;
+    }
+    
+    // 4. 记录重翻（更新限流信息）
+    recordRetranslate(node);
+    
+    // 5. 移除旧的译文（保留源文）
+    withSuppressedObserver(() => {
+        const oldContent = node.querySelector('.fluent-read-bilingual-content');
+        if (oldContent) {
+            oldContent.remove();
+        }
+        // 移除可能存在的加载动画和错误提示
+        node.querySelectorAll('.fluent-read-loading, .fluent-read-retry-wrapper').forEach(el => el.remove());
+        node.classList.remove('fluent-read-bilingual');
+        node.classList.remove('fluent-read-failure');
+    });
+    
+    // 6. 提取新的源文
+    const newSourceText = extractSourceText(node);
+    
+    // 7. 检查语言（如果已经是目标语言则跳过）
+    if (detectlang(newSourceText.replace(/[\s\u3000]/g, '')) === config.to) {
+        // 更新签名但不翻译
+        saveSourceSignature(node);
+        return false;
+    }
+    
+    // 8. 执行翻译
+    const spinner = withSuppressedObserver(() => insertLoadingSpinner(node as HTMLElement));
+    
+    translateText(newSourceText, document.title)
+        .then((text: string) => {
+            withSuppressedObserver(() => {
+                spinner.remove();
+                bilingualAppendChild(node, text);
+            });
+        })
+        .catch((error: Error) => {
+            withSuppressedObserver(() => {
+                spinner.remove();
+                insertFailedTip(node as HTMLElement, error.toString() || "重翻失败", spinner);
+            });
+        });
+    
+    return true;
+}
+
+// 扫描并重翻指定范围内源文发生变化的已翻译节点
+export function scanAndRetranslateChangedNodes(root: Element | Document = document): number {
+    const translatedNodes = root.querySelectorAll(`[${TRANSLATED_ATTR}="true"]`);
+    let retranslatedCount = 0;
+    
+    // 限制单次扫描的节点数量（防止性能问题）
+    const MAX_SCAN_NODES = 80;
+    const nodesToCheck = Array.from(translatedNodes).slice(0, MAX_SCAN_NODES);
+    
+    for (const node of nodesToCheck) {
+        // 只处理视口内可见的节点
+        if (!isNodeInViewport(node)) continue;
+        
+        // 跳过 FluentRead 自身注入的节点
+        if (node.classList.contains('fluent-read-bilingual-content') ||
+            node.classList.contains('fluent-read-loading') ||
+            node.classList.contains('fluent-read-retry-wrapper')) {
+            continue;
+        }
+        
+        if (retranslateBilingualNode(node)) {
+            retranslatedCount++;
+        }
+    }
+    
+    return retranslatedCount;
+}
+
+// 检查节点是否在视口内
+function isNodeInViewport(node: Element): boolean {
+    const rect = node.getBoundingClientRect();
+    // 稍微放宽范围，包括视口上下 100px 的区域
+    const margin = 100;
+    return (
+        rect.bottom >= -margin &&
+        rect.top <= (window.innerHeight || document.documentElement.clientHeight) + margin &&
+        rect.right >= 0 &&
+        rect.left <= (window.innerWidth || document.documentElement.clientWidth)
+    );
 }

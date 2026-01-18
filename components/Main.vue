@@ -28,6 +28,34 @@
     </el-row>
 
     <el-row class="margin-bottom margin-left-2em">
+      <el-col :span="24" class="flex-start">
+        <el-text size="small">
+          当前站点：
+          <b>{{ currentMainDomain || '（未获取到当前站点）' }}</b>
+          <span v-if="currentMainDomain">
+            （{{ isCurrentSiteBlocked ? '已在黑名单' : '未屏蔽' }}）
+          </span>
+        </el-text>
+      </el-col>
+    </el-row>
+
+    <el-row v-if="config.blockedMainDomains?.length" class="margin-bottom margin-left-2em">
+      <el-col :span="24" class="flex-start">
+        <el-text size="small" style="margin-right: 8px;">已屏蔽：</el-text>
+        <el-tag
+          v-for="domain in config.blockedMainDomains"
+          :key="domain"
+          size="small"
+          closable
+          style="margin: 2px 6px 2px 0;"
+          @close="removeBlockedDomain(domain)"
+        >
+          {{ domain }}
+        </el-tag>
+      </el-col>
+    </el-row>
+
+    <el-row class="margin-bottom margin-left-2em">
       <el-col :span="12" class="lightblue rounded-corner">
         <span class="popup-text popup-vertical-left">翻译服务</span>
       </el-col>
@@ -182,5 +210,12 @@ async function removeCurrentSiteFromBlacklist() {
     (item: string) => item !== currentMainDomain.value
   );
   ElMessage({ message: '已从黑名单移除', type: 'success', duration: 1500 });
+}
+
+function removeBlockedDomain(domain: string) {
+  ensureBlockedList();
+  config.value.blockedMainDomains = config.value.blockedMainDomains.filter(
+    (item: string) => item !== domain
+  );
 }
 </script>

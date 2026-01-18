@@ -4,6 +4,7 @@ import "element-plus/es/components/message/style/css";
 import {
   handleBilingualTranslation,
   handleSingleTranslation,
+  withSuppressedObserver,
 } from "@/entrypoints/main/trans";
 import { config } from "@/entrypoints/utils/config";
 import { styles } from "@/entrypoints/utils/constant";
@@ -24,34 +25,36 @@ export function insertFailedTip(
   errMsg: string,
   spinner: HTMLElement
 ) {
-  spinner?.remove(); // 取消转圈动画
+  withSuppressedObserver(() => {
+    spinner?.remove(); // 取消转圈动画
 
-  // 创建包装元素
-  const wrapper = document.createElement("span");
-  wrapper.classList.add("fluent-read-retry-wrapper");
+    // 创建包装元素
+    const wrapper = document.createElement("span");
+    wrapper.classList.add("fluent-read-retry-wrapper");
 
-  // 创建重试按钮
-  const retryBtn = document.createElement("span");
-  retryBtn.innerText = "重试";
-  retryBtn.classList.add("fluent-read-retry");
-  retryBtn.addEventListener("click", handleRetryClick(node, wrapper));
+    // 创建重试按钮
+    const retryBtn = document.createElement("span");
+    retryBtn.innerText = "重试";
+    retryBtn.classList.add("fluent-read-retry");
+    retryBtn.addEventListener("click", handleRetryClick(node, wrapper));
 
-  // 添加失败标记
-  node.classList.add("fluent-read-failure");
+    // 添加失败标记
+    node.classList.add("fluent-read-failure");
 
-  // 创建错误信息提示按钮
-  const errorTip = document.createElement("span");
-  errorTip.innerText = "错误原因";
-  errorTip.classList.add("fluent-read-reason");
-  errorTip.addEventListener("click", handleErrorClick(errMsg));
+    // 创建错误信息提示按钮
+    const errorTip = document.createElement("span");
+    errorTip.innerText = "错误原因";
+    errorTip.classList.add("fluent-read-reason");
+    errorTip.addEventListener("click", handleErrorClick(errMsg));
 
-  // 创建图标元素
-  const retryElement = createIconElement(icon.retry);
-  const warnElement = createIconElement(icon.warn);
+    // 创建图标元素
+    const retryElement = createIconElement(icon.retry);
+    const warnElement = createIconElement(icon.warn);
 
-  // 将所有元素批量添加到 wrapper
-  wrapper.append(retryElement, retryBtn, warnElement, errorTip);
-  node.appendChild(wrapper);
+    // 将所有元素批量添加到 wrapper
+    wrapper.append(retryElement, retryBtn, warnElement, errorTip);
+    node.appendChild(wrapper);
+  });
 }
 
 // 处理重试按钮点击事件
@@ -126,6 +129,9 @@ export function insertLoadingSpinner(
     // 忽略错误，使用默认动画
   });
   
-  node.appendChild(spinner);
+  // 使用抑制机制避免触发 MutationObserver
+  withSuppressedObserver(() => {
+    node.appendChild(spinner);
+  });
   return spinner;
 }

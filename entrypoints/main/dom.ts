@@ -26,7 +26,14 @@ export const inlineSet = new Set([
 export function grabAllNode(rootNode: Node): Element[] {
     if (!rootNode) return [];
 
+    // YouTube：用白名单选择器采集（标题/简介/评论），避免通用遍历/过滤误伤导致“完全不翻译”
+    if (isYouTubePage()) {
+        return grabAllNodeYouTube(rootNode);
+    }
+
     const result: Element[] = [];
+    // 用于过滤“重复菜单项”等高频短文本
+    const seenShortText = new Map<string, number>();
 
     const walker = document.createTreeWalker(
         rootNode,
@@ -46,9 +53,14 @@ export function grabAllNode(rootNode: Node): Element[] {
                     return NodeFilter.FILTER_REJECT;
                 }
 
-                // 在初始全局翻译时 跳过header与footer
+                // 在初始全局翻译时尽量跳过“站点级”的 header/footer（通常是导航栏/页脚）
+                // 但不能无脑拒绝所有 <header>/<footer>：很多站点（含 YouTube）会在正文模块内使用 <header> 包裹标题/信息
                 if (tag === 'header' || tag === 'footer') {
-                    return NodeFilter.FILTER_REJECT;
+                    const parent = node.parentElement;
+                    if (parent && parent.tagName.toLowerCase() === 'body') {
+                        return NodeFilter.FILTER_REJECT; // 仅拒绝 body 直下的站点头尾
+                    }
+                    return NodeFilter.FILTER_SKIP; // 允许继续向下遍历，避免误伤正文
                 }
 
                 // 检查是否只包含有效文本内容
@@ -92,13 +104,291 @@ export function grabAllNode(rootNode: Node): Element[] {
     let currentNode: Node | null;
     while (currentNode = walker.nextNode()) {
         const translateNode = grabNode(currentNode as Element | Text);
+        let ok = true;
         if (translateNode) {
+            try {
+                ok = shouldTranslateCandidate(translateNode, seenShortText);
+            } catch {
+                // 过滤器绝不能阻断翻译流程：出错时放行
+                ok = true;
+            }
+        }
+        if (translateNode && ok) {
             result.push(translateNode);
             // 跳过已确定要翻译的节点的所有子节点
             walker.currentNode = currentNode.nextSibling || currentNode;
         }
     }
     return Array.from(new Set(result));;
+}
+
+function grabAllNodeYouTube(rootNode: Node): Element[] {
+    const root =
+        (rootNode instanceof Document ? rootNode : null) ||
+        (rootNode instanceof Element ? rootNode : null);
+    if (!root) return [];
+
+    // 目标：标题 / 简介 / 评论
+    // 说明：YouTube DOM 会频繁调整，选择器尽量“多路兜底”，并且做数量上限避免一次性抓太多评论
+    const selectors = [
+        // 标题（watch 页）
+        '#title h1 yt-formatted-string',
+        'ytd-watch-metadata h1 yt-formatted-string',
+        // 简介（description 近年常见为 yt-attributed-string，也可能是 yt-formatted-string）
+        '#description yt-attributed-string',
+        '#description yt-formatted-string',
+        'ytd-text-inline-expander yt-attributed-string',
+        'ytd-text-inline-expander yt-formatted-string',
+        // 评论正文（content-text）
+        '#comments ytd-comment-thread-renderer #content-text',
+        '#comments ytd-comment-renderer #content-text',
+        '#comments yt-formatted-string#content-text',
+        '#comments yt-attributed-string#content-text',
+    ].join(',');
+
+    let nodes: Element[] = [];
+    try {
+        nodes = Array.from((root as Document | Element).querySelectorAll(selectors));
+    } catch {
+        nodes = [];
+    }
+
+    // 去重 + 基础过滤（不在这里做复杂过滤，交给后续 shouldTranslateCandidate 兜底）
+    const uniq: Element[] = [];
+    const seen = new Set<Element>();
+    for (const el of nodes) {
+        if (!el || seen.has(el)) continue;
+        seen.add(el);
+
+        // 跳过 FluentRead 自身注入节点
+        if (el.classList.contains('fluent-read-bilingual-content') ||
+            el.classList.contains('fluent-read-loading') ||
+            el.classList.contains('fluent-read-retry-wrapper')) {
+            continue;
+        }
+
+        const text = normalizeForFilter((el as any).innerText ?? el.textContent ?? '');
+        if (!text) continue;
+        // 标题/评论里可能有很短的内容（例如“👍”），这里先做一个非常宽松的下限
+        if (countNonWhitespaceChars(text) < 2) continue;
+
+        uniq.push(el);
+        // 限制数量，避免评论过多导致观察器压力过大
+        if (uniq.length >= 120) break;
+    }
+
+    return uniq;
+}
+
+// 判断一个候选节点是否值得翻译（过滤无关文本，降低请求数量）
+function shouldTranslateCandidate(node: Element, seenShortText: Map<string, number>): boolean {
+    // 跳过 FluentRead 自身注入节点
+    if (node.classList.contains('fluent-read-bilingual-content') ||
+        node.classList.contains('fluent-read-loading') ||
+        node.classList.contains('fluent-read-retry-wrapper')) {
+        return false;
+    }
+
+    // 导航/评论/侧栏/推荐/工具条等区域过滤
+    if (isInExcludedContainer(node)) return false;
+
+    // 隐藏/不可见区域过滤（display/visibility/opacity/尺寸为0）
+    if (!isElementVisible(node)) return false;
+
+    const raw = (node as any).innerText ?? node.textContent ?? '';
+    const normalized = normalizeForFilter(raw);
+
+    // 纯空白
+    if (!normalized) return false;
+
+    // 忽略太短：默认 < 8 字符；YouTube 评论区放宽，避免短评论全部被过滤
+    const minLen = isYouTubeCommentsArea(node) ? 3 : 8;
+    if (countNonWhitespaceChars(normalized) < minLen) return false;
+
+    // 纯符号/分隔线
+    if (isSymbolOnly(normalized)) return false;
+
+    // 纯链接（URL/域名/路径），常见于导航、分享、引用链接
+    if (isUrlLike(normalized)) return false;
+
+    // 重复菜单项：短文本重复出现时跳过（仅对短文本生效，避免误伤正文重复段落）
+    if (normalized.length <= 30) {
+        const key = normalized.toLowerCase();
+        const prev = seenShortText.get(key) ?? 0;
+        seenShortText.set(key, prev + 1);
+        if (prev >= 1) return false;
+    }
+
+    // 单独链接文案：如 “Home / About / Contact” 等
+    const closestLink = node.closest?.('a');
+    if (closestLink && closestLink instanceof HTMLAnchorElement) {
+        const linkText = normalizeForFilter(closestLink.innerText || closestLink.textContent || '');
+        if (linkText && linkText === normalized && (isUrlLike(linkText) || linkText.length <= 30)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+function normalizeForFilter(text: string): string {
+    if (!text) return '';
+    // 过滤时做轻量标准化：合并空白，避免把同一菜单项当成不同文本
+    return text.replace(/\s+/g, ' ').trim();
+}
+
+function countNonWhitespaceChars(text: string): number {
+    return text.replace(/[\s\u3000]/g, '').length;
+}
+
+function isSymbolOnly(text: string): boolean {
+    const t = text.trim();
+    if (!t) return true;
+    // 若完全不包含字母/数字/汉字等“可读字符”，则视为纯符号
+    // 这里用宽松判断：只要包含任意字母/数字/汉字就放行
+    // 避免使用 \p{L}/\p{N}（部分环境不支持会导致脚本直接报错）
+    if (/[A-Za-z0-9\u4e00-\u9fff]/.test(t)) return false;
+    return true;
+}
+
+function isUrlLike(text: string): boolean {
+    const t = text.trim();
+    if (!t) return false;
+    // 常见 URL / 域名 / www / 路径形式
+    if (/^(https?:\/\/|www\.)/i.test(t)) return true;
+    if (/^[a-z0-9.-]+\.[a-z]{2,}(\/\S*)?$/i.test(t)) return true;
+    // 类似 “/path/to/page” 或 “./foo”
+    if (/^(\/|\.\.?\/)\S+$/i.test(t)) return true;
+    return false;
+}
+
+function isElementVisible(el: Element): boolean {
+    // 快速属性过滤
+    if ((el as any).hidden) return false;
+    if (el.closest?.('[hidden],[aria-hidden="true"]')) return false;
+
+    // 逐层检查 display/visibility/opacity，避免隐藏菜单/弹窗内容被翻译
+    let cur: Element | null = el;
+    for (let i = 0; cur && i < 15; i++, cur = cur.parentElement) {
+        const style = getComputedStyle(cur as Element);
+        if (style.display === 'none') return false;
+        if (style.visibility === 'hidden' || style.visibility === 'collapse') return false;
+        if (Number.parseFloat(style.opacity) === 0) return false;
+    }
+
+    // 尺寸为0的节点通常不可见（例如占位、隐藏容器）
+    // 但像 YouTube 这类站点大量使用 display: contents / 自定义元素，其自身可能没有 box（宽高为0），但子元素可见
+    // 因此：
+    // - display: contents 放行（由后续文本内容过滤兜底）
+    // - YouTube 页面不使用 rect=0 判定（避免误伤标题/简介/评论）
+    try {
+        const selfStyle = getComputedStyle(el);
+        if (selfStyle.display === 'contents') return true;
+    } catch {
+        // ignore
+    }
+    if (!isYouTubePage() && el instanceof HTMLElement) {
+        const rect = el.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return false;
+    }
+    return true;
+}
+
+function isInExcludedContainer(el: Element): boolean {
+    // YouTube：明确允许标题/简介/评论区域，避免被通用关键词误伤
+    if (isYouTubePage()) {
+        const allow = el.closest?.(
+            'ytd-watch-metadata,#title,#description,' +
+            '#comments,ytd-comments,ytd-comment-thread-renderer,ytd-comment-renderer'
+        );
+        if (allow) return false;
+    }
+
+    // 标签/role 层面的排除
+    // 注意：不要使用 CSS4 的属性选择器 flags（如 [attr*="x" i]），部分环境会抛 SyntaxError
+    const structuralSelector =
+        'nav,aside,header,footer,' +
+        '[role="navigation"],[role="banner"],[role="contentinfo"],[role="complementary"],' +
+        '[role="search"],[role="menu"],[role="menubar"],[role="toolbar"],' +
+        '[aria-label*="breadcrumb"],[aria-label*="Breadcrumb"],[aria-label*="面包屑"]';
+    let structural: Element | null = null;
+    try {
+        structural = el.closest?.(structuralSelector) ?? null;
+    } catch {
+        structural = null;
+    }
+    if (structural) return true;
+
+    // class/id 关键词排除（覆盖常见导航/评论/推荐/分享/工具条等）
+    // 注意：不能用简单 includes('ad') 这类子串判断，会误伤诸如 header/read/lead 等正常类名
+    const exactTokenKeywords = new Set([
+        'nav', 'navbar', 'menu', 'breadcrumb', 'breadcrumbs',
+        // 不要把 header/footer 当作 class/id 关键词过滤：很多站点（含 YouTube）正文容器也会用 id="header" 之类包裹
+        'sidebar', 'aside', 'toolbar', 'tool-bar',
+        'comment', 'comments', 'reply', 'replies',
+        'recommend', 'recommended', 'related', 'share', 'social',
+        'pagination', 'pager', 'subscribe', 'newsletter',
+        'advert', 'advertisement', 'sponsor', 'sponsored',
+        'cookie', 'consent', 'popup', 'modal', 'drawer',
+    ]);
+
+    // 广告类 token 用更严格的规则：仅当 token 本身就是 ad/ads 或 ad-xxx 这种形式才命中
+    const tokenRegexKeywords: RegExp[] = [
+        /^ad$/i,
+        /^ads$/i,
+        /^ad[-_].+/i,
+        /^ads[-_].+/i,
+        /^advert[-_].+/i,
+        /^sponsor(ed)?[-_].+/i,
+    ];
+
+    // 中文关键词允许子串匹配（中文 class/id 往往不是 token 化的）
+    const cnSubstrings = ['导航', '侧栏', '评论', '推荐', '相关', '分享', '广告', '面包屑'];
+
+    let cur: Element | null = el;
+    for (let i = 0; cur && i < 15; i++, cur = cur.parentElement) {
+        const id = (cur as HTMLElement).id || '';
+        const cls = (cur as HTMLElement).className || '';
+        const hay = `${id} ${cls}`;
+        if (!hay) continue;
+
+        // 1) 中文子串快速判断
+        for (const k of cnSubstrings) {
+            if (hay.includes(k)) return true;
+        }
+
+        // 2) 以“token”为单位判断（避免子串误伤）
+        const tokens = hay
+            .toLowerCase()
+            .split(/[^a-z0-9\u4e00-\u9fff]+/g)
+            .filter(Boolean);
+
+        for (const t of tokens) {
+            // YouTube：不要因为 comments/reply 等 token 就整块排除（用户需要翻译评论）
+            if (isYouTubePage() && (t === 'comment' || t === 'comments' || t === 'reply' || t === 'replies')) {
+                continue;
+            }
+            if (exactTokenKeywords.has(t)) return true;
+            for (const re of tokenRegexKeywords) {
+                if (re.test(t)) return true;
+            }
+        }
+    }
+    return false;
+}
+
+function isYouTubePage(): boolean {
+    try {
+        const host = location.hostname.toLowerCase();
+        return host === 'youtube.com' || host.endsWith('.youtube.com');
+    } catch {
+        return false;
+    }
+}
+
+function isYouTubeCommentsArea(el: Element): boolean {
+    if (!isYouTubePage()) return false;
+    return !!el.closest?.('#comments,ytd-comments,ytd-comment-thread-renderer,ytd-comment-renderer');
 }
 
 // 返回最终应该翻译的父节点或 false
@@ -108,6 +398,15 @@ export function grabNode(node: any): any {
 
     // 对于 Text 节点，尝试找到其可翻译的父节点
     if (node instanceof Text) {
+        // YouTube 的关键文本（标题/简介/评论）大量包在 yt-formatted-string 等自定义元素中，
+        // 如果按通用规则找不到可翻译父节点，会导致几乎没有候选节点进入队列
+        if (isYouTubePage()) {
+            const parentEl = node.parentElement;
+            const ytFormatted = parentEl?.closest?.('yt-formatted-string');
+            if (ytFormatted) return ytFormatted;
+            const h1 = parentEl?.closest?.('h1');
+            if (h1) return h1;
+        }
         const parentOrSelf = findTranslatableParent(node);
         if (parentOrSelf && parentOrSelf !== node) {
             return parentOrSelf;
@@ -135,6 +434,8 @@ export function grabNode(node: any): any {
     }
 
     // 3. 直接翻译：块级元素
+    // YouTube：允许直接翻译 yt-formatted-string（标题/简介/评论正文常用）
+    if (isYouTubePage() && curTag === 'yt-formatted-string') return node;
     if (directSet.has(curTag)) return node;
 
     // 4. 按钮处理：特殊处理按钮内的文本
