@@ -54,6 +54,8 @@ export class Config {
     inputBoxTranslationTrigger: string; // 输入框翻译触发方式
     inputBoxTranslationTarget: string; // 输入框翻译目标语言
     blockedMainDomains: string[]; // 主域名黑名单
+    loadBalanceEnabled: boolean; // 是否启用多Key负载均衡
+    loadBalanceCooldownMs: number; // Key 冷却时间（毫秒）
 
     constructor() {
         this.on = true;
@@ -101,6 +103,8 @@ export class Config {
         this.inputBoxTranslationTrigger = 'disabled'; // 默认关闭输入框翻译
         this.inputBoxTranslationTarget = 'en'; // 默认翻译成英文
         this.blockedMainDomains = []; // 默认无黑名单
+        this.loadBalanceEnabled = false; // 默认关闭
+        this.loadBalanceCooldownMs = 60000; // 默认 60s 冷却
     }
 }
 

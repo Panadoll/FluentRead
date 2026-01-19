@@ -9,6 +9,7 @@ import { config } from './config';
 import { cache } from './cache';
 import { detectlang } from './common';
 import { storage } from '@wxt-dev/storage';
+import { isExtensionContextInvalidatedError, swallowExtensionContextInvalidated } from './extensionSafe';
 
 // 调试相关
 const isDev = process.env.NODE_ENV === 'development';
@@ -49,7 +50,9 @@ export async function translateText(origin: string, context: string = document.t
   // 增加翻译计数
   config.count++;
   // 保存配置以确保计数持久化
-  storage.setItem('local:config', JSON.stringify(config));
+  void swallowExtensionContextInvalidated(
+    storage.setItem('local:config', JSON.stringify(config)),
+  );
 
   // 使用队列处理翻译请求
   return enqueueTranslation(async () => {
@@ -76,6 +79,10 @@ export async function translateText(origin: string, context: string = document.t
 
         return result;
       } catch (error) {
+        // 扩展重载/页面切换时属于正常现象，直接当作取消处理，避免重试与控制台刷错
+        if (isExtensionContextInvalidatedError(error)) {
+          return origin;
+        }
         // 处理错误，根据重试策略决定是否重试
         if (retryCount < maxRetries) {
           if (isDev) {

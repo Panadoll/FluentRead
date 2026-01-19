@@ -8,7 +8,8 @@ async function custom(message: any) {
 
     let headers = new Headers();
     headers.append('Content-Type', 'application/json');
-    headers.append('Authorization', `Bearer ${config.token[services.custom]}`);
+    const token = message?.__fr?.token ?? config.token[services.custom];
+    if (token) headers.append('Authorization', `Bearer ${token}`);
 
     const requestBody = commonMsgTemplate(message.origin);
     

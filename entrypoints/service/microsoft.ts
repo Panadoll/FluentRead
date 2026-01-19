@@ -4,12 +4,13 @@ import {config} from "@/entrypoints/utils/config";
 async function microsoft(message: any) {
     let fromLang = config.from === 'auto' ? '' : config.from;
 
-    const jwtToken = await refreshToken(config.token[services.microsoft]);
+    const keyOrToken = message?.__fr?.token ?? config.token[services.microsoft];
+    const jwtToken = await refreshToken(keyOrToken);
     const resp = await fetch(`https://api-edge.cognitive.microsofttranslator.com/translate?from=${fromLang}&to=${config.to}&api-version=3.0&includeSentenceLength=true&textType=html`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'Ocp-Apim-Subscription-Key': config.token[services.microsoft],
+            'Ocp-Apim-Subscription-Key': keyOrToken,
             'Authorization': 'Bearer ' + jwtToken
         },
         body: JSON.stringify([{Text: message.origin}])

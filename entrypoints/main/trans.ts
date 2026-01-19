@@ -8,6 +8,8 @@ import { detectlang, throttle } from "@/entrypoints/utils/common";
 import { getMainDomain, replaceCompatFn } from "@/entrypoints/main/compat";
 import { config } from "@/entrypoints/utils/config";
 import { translateText, cancelAllTranslations } from '@/entrypoints/utils/translateApi';
+import { storage } from '@wxt-dev/storage';
+import { swallowExtensionContextInvalidated } from "@/entrypoints/utils/extensionSafe";
 
 let hoverTimer: any; // 鼠标悬停计时器
 let htmlSet = new Set(); // 防抖
@@ -478,7 +480,12 @@ export const handleBtnTranslation = throttle((node: any) => {
         return;
     }
 
-    config.count++ && storage.setItem('local:config', JSON.stringify(config));
+    const prevCount = config.count++;
+    if (prevCount > 0) {
+        void swallowExtensionContextInvalidated(
+            storage.setItem('local:config', JSON.stringify(config)),
+        );
+    }
 
     browser.runtime.sendMessage({ context: document.title, origin: origin })
         .then((text: string) => {

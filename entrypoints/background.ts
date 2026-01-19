@@ -2,9 +2,11 @@ import {_service} from "@/entrypoints/service/_service";
 import {config} from "@/entrypoints/utils/config";
 import {CONTEXT_MENU_IDS} from "@/entrypoints/utils/constant";
 import { storage } from '@wxt-dev/storage';
+import { WeightedLoadBalancer, isRateLimitError } from "@/entrypoints/utils/loadBalancer";
 
 // 翻译状态管理
 let translationStateMap = new Map<number, boolean>(); // tabId -> isTranslated
+const loadBalancer = new WeightedLoadBalancer(60000);
 
 function getMainDomainFromUrl(url?: string): string {
     if (!url) return '';
@@ -235,10 +237,48 @@ export default defineBackground({
                         return;
                     }
                     
-                    // 处理普通翻译请求
-                    _service[config.service](message)
-                        .then(resp => resolve(resp))    // 成功
-                        .catch(error => reject(error)); // 失败
+                    // 处理普通翻译请求（支持同一 service 多Key 加权轮询 + 60s 冷却）
+                    const service = config.service;
+                    const rawToken = config.token?.[service];
+                    const pool = config.loadBalanceEnabled ? loadBalancer.parseTokenPool(rawToken) : [];
+
+                    if (!config.loadBalanceEnabled || pool.length <= 1) {
+                        _service[service](message)
+                            .then(resp => resolve(resp))
+                            .catch(error => reject(error));
+                        return;
+                    }
+
+                    const tried = new Set<string>();
+                    let lastError: any;
+                    for (let attempt = 0; attempt < pool.length; attempt++) {
+                        const token = loadBalancer.chooseToken({ service, config, pool, tried });
+                        if (!token) break;
+                        tried.add(token);
+
+                        try {
+                            const resp = await _service[service]({
+                                ...message,
+                                __fr: { ...(message?.__fr || {}), token }
+                            });
+                            resolve(resp);
+                            return;
+                        } catch (error) {
+                            lastError = error;
+                            if (isRateLimitError(error)) {
+                                loadBalancer.markRateLimited({
+                                    service,
+                                    token,
+                                    cooldownMs: config.loadBalanceCooldownMs || 60000,
+                                });
+                                continue; // 换下一个 key
+                            }
+                            reject(error);
+                            return;
+                        }
+                    }
+
+                    reject(lastError ?? new Error('翻译失败：所有 Key 均不可用（可能处于冷却中）'));
                 } catch (error) {
                     resolve({ success: false, error: error instanceof Error ? error.message : String(error) });
                 }

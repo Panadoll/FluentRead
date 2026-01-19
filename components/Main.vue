@@ -107,6 +107,29 @@
         <el-input v-model="config.custom" placeholder="http://localhost:11434/v1/chat/completions" />
       </el-col>
     </el-row>
+
+    <el-row v-show="showTokenSetting" class="margin-bottom margin-left-2em">
+      <el-col :span="12" class="lightblue rounded-corner">
+        <span class="popup-text popup-vertical-left">API Key</span>
+      </el-col>
+      <el-col :span="12">
+        <el-input
+          v-model="config.token[config.service]"
+          type="textarea"
+          :rows="3"
+          placeholder="可多行，每行一个 key；支持 key|weight（例如本地key|3）"
+        />
+      </el-col>
+    </el-row>
+
+    <el-row v-show="showTokenSetting" class="margin-bottom margin-left-2em">
+      <el-col :span="12" class="lightblue rounded-corner">
+        <span class="popup-text popup-vertical-left">负载均衡</span>
+      </el-col>
+      <el-col :span="12" class="flex-end">
+        <el-switch v-model="config.loadBalanceEnabled" inline-prompt active-text="开" inactive-text="关" />
+      </el-col>
+    </el-row>
   </div>
 </template>
 
@@ -128,6 +151,7 @@ const showCustomModel = computed(() =>
   config.value.model[config.value.service] === customModelString
 );
 const showCustomUrl = computed(() => servicesType.isUseCustomUrl(config.value.service));
+const showTokenSetting = computed(() => servicesType.isCustom(config.value.service));
 const modelOptions = computed(() => models.get(config.value.service) || []);
 
 function getMainDomainFromUrl(url?: string): string {

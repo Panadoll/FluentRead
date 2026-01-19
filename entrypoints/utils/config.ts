@@ -1,5 +1,7 @@
 import { Config } from "@/entrypoints/utils/model";
 import { services } from "@/entrypoints/utils/option";
+import { storage } from '@wxt-dev/storage';
+import { isExtensionContextInvalidatedError } from './extensionSafe';
 
 // 声明 config 类型, new Config() 会设置好所有默认值
 export let config: Config = new Config();
@@ -11,6 +13,12 @@ function normalizeConfigValues() {
     config.autoTranslate = true;
     if (!config.model[services.custom]) {
         config.model[services.custom] = 'llama3';
+    }
+    if (typeof (config as any).loadBalanceEnabled !== 'boolean') {
+        (config as any).loadBalanceEnabled = false;
+    }
+    if (typeof (config as any).loadBalanceCooldownMs !== 'number' || !(config as any).loadBalanceCooldownMs) {
+        (config as any).loadBalanceCooldownMs = 60000;
     }
 }
 
@@ -40,6 +48,7 @@ async function loadConfig() {
         normalizeConfigValues();
         await storage.setItem('local:config', JSON.stringify(config));
     } catch (error) {
+        if (isExtensionContextInvalidatedError(error)) return;
         console.error('Error loading or validating config:', error);
         // 出错时也尝试保存一次默认配置
         try {
@@ -47,6 +56,7 @@ async function loadConfig() {
             normalizeConfigValues();
             await storage.setItem('local:config', JSON.stringify(config));
         } catch (saveError) {
+            if (isExtensionContextInvalidatedError(saveError)) return;
             console.error('Failed to save default config after an error:', saveError);
         }
     }
