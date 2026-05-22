@@ -247,8 +247,15 @@ function getMainDomainFromUrl(url?: string): string {
   if (!url) return '';
   try {
     const noProtocol = url.replace(/^(https?:\/\/)/, '');
-    const hostname = noProtocol.split('/')[0].replace(/^www\./, '');
-    const parts = hostname.split('.');
+    const hostname = noProtocol.split('/')[0];
+    
+    if (hostname === 'twitter.com' || hostname === 'x.com' || 
+        hostname === 'www.twitter.com' || hostname === 'www.x.com') {
+      return 'x.com';
+    }
+
+    const cleanHostname = hostname.replace(/^www\./, '');
+    const parts = cleanHostname.split('.');
     if (parts.length >= 3 &&
         ((parts[parts.length - 2] === 'co' || parts[parts.length - 2] === 'com') &&
         parts[parts.length - 1].length === 2)) {
@@ -257,7 +264,7 @@ function getMainDomainFromUrl(url?: string): string {
     if (parts.length >= 2) {
       return parts.slice(-2).join('.');
     }
-    return hostname;
+    return cleanHostname;
   } catch (error) {
     console.error('getMainDomainFromUrl error:', error);
     return '';

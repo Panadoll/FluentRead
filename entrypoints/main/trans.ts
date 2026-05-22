@@ -222,7 +222,6 @@ export function autoTranslateEnglishPage() {
 
     // 获取所有需要翻译的节点
     const nodes = grabAllNode(document.body);
-    if (!nodes.length) return;
 
     isAutoTranslating = true;
 
@@ -297,9 +296,11 @@ export function autoTranslateEnglishPage() {
     });
 
     // 开始观察所有节点
-    nodes.forEach(node => {
-        observeCandidate(node);
-    });
+    if (nodes.length > 0) {
+        nodes.forEach(node => {
+            observeCandidate(node);
+        });
+    }
 
     // 创建 MutationObserver 监听 DOM 变化
     mutationObserver = new MutationObserver((mutations) => {
