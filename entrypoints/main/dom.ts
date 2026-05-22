@@ -1,6 +1,8 @@
 import { getMainDomain, selectCompatFn } from "@/entrypoints/main/compat";
 import { html } from 'js-beautify';
 import { handleBtnTranslation } from "@/entrypoints/main/trans";
+import { shouldSkipNodeTranslation } from "@/entrypoints/utils/common";
+import { config } from "@/entrypoints/utils/config";
 
 // 直接翻译的标签集合（块级元素）
 const directSet = new Set([
@@ -464,11 +466,13 @@ function shouldSkipNode(node: any, tag: string): boolean {
     // 3. 判断节点是否可编辑
     // 4. 判断文本是否过长
     // 5. 判断文本是否为纯数字或标准数字格式（仅当节点内容几乎全是数字时才跳过）
+    // 6. 判断是否为纯网址/链接
     return skipSet.has(tag) ||
         node.classList?.contains('notranslate') ||
         node.isContentEditable ||
         checkTextSize(node) ||
-        isMainlyNumericContent(node);
+        isMainlyNumericContent(node) ||
+        isUrlLike(node.textContent || '');
 }
 
 // 检查文本长度
@@ -665,6 +669,9 @@ function handleFirstLineText(node: any): boolean {
     let child = node.firstChild;
     while (child) {
         if (child.nodeType === Node.TEXT_NODE && child.textContent.trim()) {
+            if (shouldSkipNodeTranslation(child.textContent, config.to)) {
+                return false;
+            }
             browser.runtime.sendMessage({
                 context: document.title,
                 origin: child.textContent

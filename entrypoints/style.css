@@ -3,13 +3,15 @@
     100% { transform: rotate(360deg); }
 }
 .fluent-read-loading {
-    border: 3px solid #f3f3f3; /* 轨迹灰色 */
-    border-top: 3px solid blue;   /* 主色调，首次翻译蓝色、缓存应改为绿色 */
+    border: 1px solid rgba(128, 128, 128, 0.2); /* 灰色外轨 */
+    border-top: 1px solid rgba(128, 128, 128, 0.8);   /* 灰色内轨 */
     border-radius: 50%;
-    width: 12px;
-    height: 12px;
-    animation: spin 1s linear infinite;
+    width: 6px; /* 进一步缩小至 6px */
+    height: 6px; /* 进一步缩小至 6px */
+    animation: spin 0.8s linear infinite;
     display: inline-block;
+    vertical-align: middle;
+    margin-left: 4px; /* 与前文保留适当的小间距 */
 }
 
 /* 静态加载样式（禁用动画时） */
@@ -209,12 +211,19 @@
     display: block; /* 设置为块级元素，强制换行 */
     white-space: pre-wrap; /* 保留 \n 段落/换行，避免译文被折叠成一坨 */
     word-break: break-word; /* 允许在单词内断行，避免超出容器边界 */
-    margin: 8px 0 !important; /* 上下边距设置为8px，并强制覆盖其他样式 */
-    color: inherit; /* 保持文本颜色与周围文本一致 */
+    margin: 4px 0 6px 0 !important; /* 精简外边距，上方 4px 紧跟原文，下方 6px 留空 */
+    color: var(--fr-text-color, inherit) !important; /* 保持译文为原始文字颜色，避免被父容器变暗所影响 */
+    line-height: 1.45; /* 优化行高，使得阅读体验更加舒适 */
     background: transparent; /* 确保背景透明，与周围背景融合 */
     box-sizing: border-box; /* 使用 border-box 模型，确保内外边距和边框计算正确 */
     overflow-wrap: break-word; /* 处理长单词或 URL 的断行，避免溢出 */
 }
+
+/* 翻译完成的双语容器，将原文（及其它子节点）置为半透明暗色 */
+.fluent-read-bilingual {
+    color: var(--fr-original-color) !important;
+}
+
 
 .fluent-display-lightyellow {
     background-color: rgba(255, 235, 59, 0.2);

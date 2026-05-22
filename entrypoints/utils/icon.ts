@@ -118,7 +118,7 @@ export function insertLoadingSpinner(
 ): HTMLElement {
   const spinner = document.createElement("span");
   spinner.className = "fluent-read-loading";
-  if (isCache) spinner.style.borderTop = "3px solid green"; // 存在缓存时改为绿色
+  if (isCache) spinner.style.borderTop = "1px solid #22c55e"; // 存在缓存时改为 1px 细的翠绿色
   
   // 异步检查动画配置
   import('@/entrypoints/utils/config').then(({ config }) => {

@@ -39,6 +39,34 @@ async function updateBlacklist(mainDomain: string, shouldAdd: boolean) {
         : list.filter((item: string) => item !== mainDomain);
 
     parsed.blockedMainDomains = next;
+    
+    // 如果加入黑名单，从白名单中移出
+    if (shouldAdd) {
+        const whitelist = Array.isArray(parsed.allowedMainDomains) ? parsed.allowedMainDomains : [];
+        parsed.allowedMainDomains = whitelist.filter((item: string) => item !== mainDomain);
+    }
+
+    Object.assign(config, parsed);
+    await storage.setItem('local:config', JSON.stringify(parsed));
+}
+
+async function updateWhitelist(mainDomain: string, shouldAdd: boolean) {
+    if (!mainDomain) return;
+    const value = await storage.getItem('local:config');
+    const parsed = typeof value === 'string' && value ? JSON.parse(value) : {};
+    const list = Array.isArray(parsed.allowedMainDomains) ? parsed.allowedMainDomains : [];
+    const next = shouldAdd
+        ? Array.from(new Set([...list, mainDomain]))
+        : list.filter((item: string) => item !== mainDomain);
+
+    parsed.allowedMainDomains = next;
+
+    // 如果加入白名单，从黑名单中移出
+    if (shouldAdd) {
+        const blacklist = Array.isArray(parsed.blockedMainDomains) ? parsed.blockedMainDomains : [];
+        parsed.blockedMainDomains = blacklist.filter((item: string) => item !== mainDomain);
+    }
+
     Object.assign(config, parsed);
     await storage.setItem('local:config', JSON.stringify(parsed));
 }
@@ -123,14 +151,28 @@ export default defineBackground({
 
             browser.contextMenus.create({
                 id: CONTEXT_MENU_IDS.ADD_TO_BLACKLIST,
-                title: '加入黑名单并撤销翻译',
+                title: '从不翻译此域名',
                 parentId: 'fluentread-parent',
                 contexts: ['page', 'selection'],
             });
 
             browser.contextMenus.create({
                 id: CONTEXT_MENU_IDS.REMOVE_FROM_BLACKLIST,
-                title: '从黑名单移除',
+                title: '恢复默认智能翻译（从黑名单移除）',
+                parentId: 'fluentread-parent',
+                contexts: ['page', 'selection'],
+            });
+
+            browser.contextMenus.create({
+                id: CONTEXT_MENU_IDS.ADD_TO_WHITELIST,
+                title: '总是自动翻译此域名',
+                parentId: 'fluentread-parent',
+                contexts: ['page', 'selection'],
+            });
+
+            browser.contextMenus.create({
+                id: CONTEXT_MENU_IDS.REMOVE_FROM_WHITELIST,
+                title: '恢复默认智能翻译（从白名单移除）',
                 parentId: 'fluentread-parent',
                 contexts: ['page', 'selection'],
             });
@@ -183,11 +225,26 @@ export default defineBackground({
                 updateBlacklist(mainDomain, false).catch((error: any) => {
                     console.error('Failed to update blacklist:', error);
                 });
+            } else if (info.menuItemId === CONTEXT_MENU_IDS.ADD_TO_WHITELIST) {
+                const mainDomain = getMainDomainFromUrl(tab.url);
+                updateWhitelist(mainDomain, true).then(() => {
+                    browser.tabs.sendMessage(tab.id, {
+                        type: 'contextMenuTranslate',
+                        action: 'fullPage'
+                    }).catch(() => {});
+                }).catch((error: any) => {
+                    console.error('Failed to update whitelist:', error);
+                });
+            } else if (info.menuItemId === CONTEXT_MENU_IDS.REMOVE_FROM_WHITELIST) {
+                const mainDomain = getMainDomainFromUrl(tab.url);
+                updateWhitelist(mainDomain, false).catch((error: any) => {
+                    console.error('Failed to update whitelist:', error);
+                });
             }
         });
 
         // 更新右键菜单状态
-        const updateContextMenus = (tabId: number) => {
+        const updateContextMenus = async (tabId: number) => {
             const isTranslated = translationStateMap.get(tabId) || false;
             
             try {
@@ -202,6 +259,43 @@ export default defineBackground({
                     enabled: isTranslated,
                     title: isTranslated ? '撤销翻译' : '撤销翻译 (无翻译)'
                 });
+
+                // 获取当前 tab 网址以决定白名单/黑名单显示
+                const tab = await browser.tabs.get(tabId);
+                const mainDomain = getMainDomainFromUrl(tab?.url);
+                
+                // 判断当前自动翻译范围模式
+                const isWhitelistMode = config.autoTranslateMode === 'whitelist';
+
+                if (mainDomain) {
+                    const isBlocked = config.blockedMainDomains?.includes(mainDomain);
+                    const isAllowed = config.allowedMainDomains?.includes(mainDomain);
+                    
+                    // 黑名单菜单控制
+                    browser.contextMenus.update(CONTEXT_MENU_IDS.ADD_TO_BLACKLIST, {
+                        visible: !isWhitelistMode, // 如果是白名单模式，则隐藏“从不翻译”
+                        enabled: !isBlocked,
+                        title: isBlocked ? '已加入从不翻译名单' : '从不翻译此域名'
+                    });
+                    
+                    browser.contextMenus.update(CONTEXT_MENU_IDS.REMOVE_FROM_BLACKLIST, {
+                        visible: !isWhitelistMode, // 如果是白名单模式，则隐藏
+                        enabled: isBlocked
+                    });
+                    
+                    // 白名单菜单控制
+                    browser.contextMenus.update(CONTEXT_MENU_IDS.ADD_TO_WHITELIST, {
+                        enabled: !isAllowed,
+                        title: isAllowed 
+                            ? (isWhitelistMode ? '已加入检测白名单' : '已加入总是翻译名单') 
+                            : (isWhitelistMode ? '在此域名开启智能检测' : '总是自动翻译此域名')
+                    });
+                    
+                    browser.contextMenus.update(CONTEXT_MENU_IDS.REMOVE_FROM_WHITELIST, {
+                        enabled: isAllowed,
+                        title: isWhitelistMode ? '在此域名关闭智能检测' : '恢复默认智能翻译（从白名单移除）'
+                    });
+                }
             } catch (error) {
                 console.error('Failed to update context menus:', error);
             }
@@ -224,6 +318,19 @@ export default defineBackground({
         // 监听标签页关闭事件，清理状态
         browser.tabs.onRemoved.addListener((tabId: any) => {
             translationStateMap.delete(tabId);
+        });
+
+        // 监听配置改变，刷新当前活动标签页的菜单
+        storage.watch('local:config', async () => {
+            try {
+                const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+                const activeTab = tabs[0];
+                if (activeTab?.id) {
+                    updateContextMenus(activeTab.id);
+                }
+            } catch (err) {
+                console.error('Failed to update context menus on config change:', err);
+            }
         });
 
         // 处理翻译请求

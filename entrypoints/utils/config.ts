@@ -20,6 +20,12 @@ function normalizeConfigValues() {
     if (typeof (config as any).loadBalanceCooldownMs !== 'number' || !(config as any).loadBalanceCooldownMs) {
         (config as any).loadBalanceCooldownMs = 60000;
     }
+    if (!Array.isArray(config.allowedMainDomains)) {
+        config.allowedMainDomains = [];
+    }
+    if (config.autoTranslateMode !== 'smart' && config.autoTranslateMode !== 'whitelist') {
+        config.autoTranslateMode = 'whitelist';
+    }
 }
 
 // 检查从存储中解析出的对象是否是有效的Config对象

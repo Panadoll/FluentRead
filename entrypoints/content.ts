@@ -64,6 +64,43 @@ function initGestureListeners(): void {
     }, { capture: true, passive: true });
 }
 
+// 初始化全局快捷键监听器（Alt + T 一键切换翻译/还原）
+function initHotkeyListener(): void {
+    document.addEventListener('keydown', (event: KeyboardEvent) => {
+        if (config.on === false) return;
+        
+        // 匹配 Alt + T (在 Mac 上 Option+T 可能会输出 'å' 或 'Å')
+        const isAltT = event.altKey && !event.ctrlKey && !event.metaKey && (
+            event.key === 't' || 
+            event.key === 'T' || 
+            event.key === 'å' || 
+            event.key === 'Å'
+        );
+        
+        if (isAltT) {
+            // 如果焦点在输入框/编辑器，不触发快捷键，防止干扰打字
+            const activeEl = document.activeElement;
+            if (activeEl && (
+                activeEl.tagName === 'INPUT' || 
+                activeEl.tagName === 'TEXTAREA' || 
+                activeEl.getAttribute('contenteditable') === 'true'
+            )) {
+                return;
+            }
+            
+            event.preventDefault();
+            event.stopPropagation();
+            
+            const hasTranslated = document.querySelector('[data-fr-translated="true"]') !== null;
+            if (hasTranslated) {
+                restoreOriginalContent();
+            } else {
+                autoTranslateEnglishPage();
+            }
+        }
+    }, { capture: true });
+}
+
 export default defineContentScript({
     matches: ['<all_urls>'],
     runAt: 'document_end',
@@ -78,6 +115,9 @@ export default defineContentScript({
         
         // 初始化用户操作监听器（用于展开重翻功能）
         initGestureListeners();
+        
+        // 初始化快捷键监听器
+        initHotkeyListener();
 
         cache.cleaner();
 
@@ -144,17 +184,37 @@ function scheduleAutoTranslate() {
     tick();
 }
 
-function shouldAutoTranslateDecision(): { shouldTranslate: boolean; reason: 'noText' | 'blocked' | 'langZh' | 'zhRatio' | 'detectedZh' | 'disabled' } {
+function shouldAutoTranslateDecision(): { shouldTranslate: boolean; reason: 'noText' | 'blocked' | 'langZh' | 'zhRatio' | 'detectedZh' | 'disabled' | 'whitelist' } {
     if (config.autoTranslate !== true) return { shouldTranslate: false, reason: 'disabled' };
 
     const mainDomain = getMainDomain(location.href);
+
+    // 1. 如果是“仅白名单”自动翻译模式
+    if (config.autoTranslateMode === 'whitelist') {
+        // 不在白名单中，直接拦截不翻译
+        if (!mainDomain || !config.allowedMainDomains?.includes(mainDomain)) {
+            return { shouldTranslate: false, reason: 'disabled' };
+        }
+        // 在白名单中，则放行进入后续的智能检测流程
+    }
+
+    // 2. 智能检测自动翻译模式下的白名单“强翻”逻辑
+    if (config.autoTranslateMode === 'smart' && mainDomain && config.allowedMainDomains?.includes(mainDomain)) {
+        const sample = getSampleText();
+        if (!sample || sample.length < MIN_SAMPLE_LENGTH) {
+            return { shouldTranslate: false, reason: 'noText' };
+        }
+        return { shouldTranslate: true, reason: 'whitelist' };
+    }
+
+    // 黑名单拦截（主要用于智能检测模式）
     if (mainDomain && config.blockedMainDomains?.includes(mainDomain)) {
         return { shouldTranslate: false, reason: 'blocked' };
     }
 
-    // YouTube：页面 UI 里经常夹杂大量中文/本地化文本，或 lang=zh-* 导致被误判为中文站而不触发自动翻译
-    // 但我们在 DOM 采集阶段已经做了 YouTube 白名单（标题/简介/评论）+ 语言检测兜底，因此这里直接放行自动翻译触发
-    if (mainDomain === 'youtube.com') {
+    // YouTube 与 X (Twitter)：页面 UI 里经常夹杂大量中文/本地化文本，或 lang=zh-* 导致被误判为中文站而不触发自动翻译
+    // 但我们在具体的节点级翻译中已有 shouldSkipNodeTranslation 过滤进行精准把关，因此此类社交多语种站点直接放行自动翻译触发
+    if (mainDomain === 'youtube.com' || mainDomain === 'x.com') {
         return { shouldTranslate: true, reason: 'disabled' };
     }
 
@@ -210,6 +270,11 @@ function isYouTubePage(): boolean {
 function scheduleYouTubeRouteTranslate(): void {
     if (!isYouTubePage()) return;
     if (config.autoTranslate !== true) return;
+    
+    // 如果是仅白名单模式，且 YouTube 不在白名单中，跳过自动翻译
+    if (config.autoTranslateMode === 'whitelist' && !config.allowedMainDomains?.includes('youtube.com')) {
+        return;
+    }
 
     const url = location.href;
     if (url === lastYtUrl) return;

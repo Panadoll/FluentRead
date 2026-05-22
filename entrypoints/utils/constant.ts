@@ -33,4 +33,6 @@ export const CONTEXT_MENU_IDS = {
     RESTORE_ORIGINAL: 'fluent-read-restore-original',
     ADD_TO_BLACKLIST: 'fluent-read-add-to-blacklist',
     REMOVE_FROM_BLACKLIST: 'fluent-read-remove-from-blacklist',
+    ADD_TO_WHITELIST: 'fluent-read-add-to-whitelist',
+    REMOVE_FROM_WHITELIST: 'fluent-read-remove-from-whitelist',
 }

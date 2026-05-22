@@ -4,7 +4,7 @@ import { options, servicesType } from "../utils/option";
 import { insertFailedTip, insertLoadingSpinner } from "../utils/icon";
 import { styles } from "@/entrypoints/utils/constant";
 import { beautyHTML, grabNode, grabAllNode, LLMStandardHTML, smashTruncationStyle } from "@/entrypoints/main/dom";
-import { detectlang, throttle } from "@/entrypoints/utils/common";
+import { detectlang, throttle, shouldSkipNodeTranslation } from "@/entrypoints/utils/common";
 import { getMainDomain, replaceCompatFn } from "@/entrypoints/main/compat";
 import { config } from "@/entrypoints/utils/config";
 import { translateText, cancelAllTranslations } from '@/entrypoints/utils/translateApi';
@@ -145,6 +145,8 @@ export function isObserverSuppressed(): boolean {
     return suppressObserver;
 }
 
+
+
 // 恢复原文内容
 export function restoreOriginalContent() {
     // 取消所有等待中的翻译任务
@@ -161,6 +163,10 @@ export function restoreOriginalContent() {
             
             // 移除可能添加的翻译相关类
             node.classList.remove('fluent-read-bilingual');
+            if (node instanceof HTMLElement) {
+                node.style.removeProperty('--fr-text-color');
+                node.style.removeProperty('--fr-original-color');
+            }
         }
     });
     
@@ -420,7 +426,7 @@ export function handleSingleTranslation(node: any, slide: boolean) {
 
 
 function bilingualTranslate(node: any, nodeOuterHTML: any) {
-    if (detectlang(node.textContent.replace(/[\s\u3000]/g, '')) === config.to) return;
+    if (shouldSkipNodeTranslation(node.textContent, config.to)) return;
 
     // bilingual 模式也尽量保留段落/换行，避免译文排版被压扁
     const origin = (node as HTMLElement)?.innerText ?? node.textContent;
@@ -441,7 +447,7 @@ function bilingualTranslate(node: any, nodeOuterHTML: any) {
 
 
 export function singleTranslate(node: any) {
-    if (detectlang(node.textContent.replace(/[\s\u3000]/g, '')) === config.to) return;
+    if (shouldSkipNodeTranslation(node.textContent, config.to)) return;
 
     let origin = servicesType.isMachine(config.service) ? node.innerHTML : LLMStandardHTML(node);
     let spinner = insertLoadingSpinner(node);
@@ -497,7 +503,27 @@ export const handleBtnTranslation = throttle((node: any) => {
 
 function bilingualAppendChild(node: any, text: string) {
     withSuppressedObserver(() => {
+        // 读取并计算当前文字颜色，用于原文变暗而译文不变色
+        let originalColor = "inherit";
+        try {
+            originalColor = window.getComputedStyle(node).color;
+        } catch (e) {
+            // ignore
+        }
+
         node.classList.add("fluent-read-bilingual");
+
+        if (originalColor && originalColor !== "inherit") {
+            node.style.setProperty('--fr-text-color', originalColor);
+            
+            // 提取 rgb 颜色并替换/生成 alpha 为 0.5 的 rgba 颜色
+            let originalColorDimmed = originalColor;
+            if (originalColor.startsWith("rgb")) {
+                originalColorDimmed = originalColor.replace(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*[\d.]+)?\)/, "rgba($1, $2, $3, 0.5)");
+            }
+            node.style.setProperty('--fr-original-color', originalColorDimmed);
+        }
+
         let newNode = document.createElement("span");
         newNode.classList.add("fluent-read-bilingual-content");
         // find the style
@@ -547,13 +573,18 @@ export function retranslateBilingualNode(node: Element): boolean {
         node.querySelectorAll('.fluent-read-loading, .fluent-read-retry-wrapper').forEach(el => el.remove());
         node.classList.remove('fluent-read-bilingual');
         node.classList.remove('fluent-read-failure');
+
+        if (node instanceof HTMLElement) {
+            node.style.removeProperty('--fr-text-color');
+            node.style.removeProperty('--fr-original-color');
+        }
     });
     
     // 6. 提取新的源文
     const newSourceText = extractSourceText(node);
     
     // 7. 检查语言（如果已经是目标语言则跳过）
-    if (detectlang(newSourceText.replace(/[\s\u3000]/g, '')) === config.to) {
+    if (shouldSkipNodeTranslation(newSourceText, config.to)) {
         // 更新签名但不翻译
         saveSourceSignature(node);
         return false;

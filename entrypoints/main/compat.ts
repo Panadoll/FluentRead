@@ -572,11 +572,23 @@ export const selectCompatFn: SelectCompatFn = {
  * 判断是否应该跳过Twitter网站上的特定元素
  */
 function shouldSkipTwitterElement(node: any): boolean {
+    // 屏蔽 X.com/Twitter 官方文章 (X Articles) 翻译
+    const el = node.closest ? node : node.parentElement;
+    if (el) {
+        if (el.closest('[data-testid="twitterArticleReadView"]') || 
+            el.matches('[data-testid="twitter-article-title"]') ||
+            (el.className && typeof el.className === 'string' && el.className.includes('longform-'))) {
+            debugLog('Twitter', '跳过X文章元素', node.textContent);
+            return true;
+        }
+    }
+
     // 检查是否为特殊内容（URL、邮箱、用户名等）
     if (node.textContent && isSpecialContent(node.textContent)) {
         debugLog('Twitter', '特殊内容', node.textContent);
         return true;
     }
+
 
     // 如果当前节点或其祖先节点匹配这些选择器，则跳过
     const skipSelectors = [
@@ -621,6 +633,22 @@ function shouldSkipTwitterElement(node: any): boolean {
     for (const selector of skipSelectors) {
         if (node.matches?.(selector)) {
             debugLog('Twitter', '选择器匹配跳过', selector, node.textContent);
+            return true;
+        }
+    }
+
+    // 针对特定的祖先容器（如用户名/昵称、侧边栏容器等）进行深度跳过检查，防止误伤普通推文
+    const skipAncestors = [
+        'div[data-testid="User-Name"]',
+        'div[data-testid="UserName"]',
+        'div[data-testid="UserCell"]',
+        'div[data-testid="HoverCard"]',
+        'div[data-testid="sidebarColumn"]',
+        'aside[aria-label="Who to follow"]'
+    ];
+    for (const ancestorSelector of skipAncestors) {
+        if (node.closest?.(ancestorSelector)) {
+            debugLog('Twitter', '祖先选择器匹配跳过', ancestorSelector, node.textContent);
             return true;
         }
     }
